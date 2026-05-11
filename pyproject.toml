@@ -3,7 +3,7 @@ name = "optim-charpente"
 version = "0.1.0"
 description = "Optimisation d'affectation grumes -> débits pour charpente amateur"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.10,<4.0"
 license = { text = "MIT" }
 authors = [{ name = "Charpentier amateur" }]
 keywords = ["charpente", "bois", "optimisation", "cutting-stock"]
