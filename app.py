@@ -139,6 +139,234 @@ for key, default in [
 tab_1d, tab_2d = st.tabs(["📏 Tronçonnage 1D", "⭕ Équarrissage 2D"])
 
 
+# ========== Helpers viz (définis avant les onglets pour éviter NameError) ==========
+
+def _chord(val: float, R: float, horizontal: bool = True):
+    """Segment de corde d'un disque de rayon R à hauteur/abscisse val."""
+    import math
+    sq = R * R - val * val
+    if sq <= 0:
+        return None
+    span = math.sqrt(sq)
+    if horizontal:
+        return (-span, val), (span, val)
+    return (val, -span), (val, span)
+
+
+def figure_section_grume(res):
+    """Trace le disque de la grume + les rectangles placés + les traits de coupe."""
+    fig, ax = plt.subplots(figsize=(7, 7))
+    R = res.diametre / 2
+
+    cercle = plt.Circle((0, 0), R, facecolor="#f4ecd8",
+                        edgecolor="#5a4a2a", linewidth=2, zorder=1)
+    ax.add_patch(cercle)
+    for r in (R*0.85, R*0.65, R*0.45, R*0.25):
+        ax.add_patch(plt.Circle((0, 0), r, fill=False,
+                                edgecolor="#c8b88a", linewidth=0.5,
+                                linestyle="--", zorder=2))
+    ax.plot(0, 0, marker="+", markersize=14, color="#5a4a2a",
+            markeredgewidth=2, zorder=10)
+
+    bases = sorted({p.nom for p in res.placements})
+    cmap_colors = plt.cm.Set2.colors + plt.cm.Pastel2.colors
+    cmap = {b: cmap_colors[i % len(cmap_colors)] for i, b in enumerate(bases)}
+
+    for p in res.placements:
+        rect = mpatches.Rectangle((p.x, p.y), p.largeur, p.hauteur,
+                                   facecolor=cmap[p.nom], edgecolor="black",
+                                   linewidth=1.0, zorder=5)
+        ax.add_patch(rect)
+        if min(p.largeur, p.hauteur) > 0.04:
+            ax.text(p.x + p.largeur/2, p.y + p.hauteur/2,
+                    f"{p.nom}\n{p.largeur*100:.0f}×{p.hauteur*100:.0f}",
+                    ha="center", va="center",
+                    fontsize=8, fontweight="bold", zorder=6)
+
+        # Traits de coupe : cordes horizontales et verticales aux bords de chaque pièce
+        for y_edge in (p.y, p.y + p.hauteur):
+            chord = _chord(y_edge, R, horizontal=True)
+            if chord:
+                ax.plot([chord[0][0], chord[1][0]], [chord[0][1], chord[1][1]],
+                        color="#2c1810", linewidth=0.9, linestyle="-",
+                        zorder=4, solid_capstyle="butt")
+        for x_edge in (p.x, p.x + p.largeur):
+            chord = _chord(x_edge, R, horizontal=False)
+            if chord:
+                ax.plot([chord[0][0], chord[1][0]], [chord[0][1], chord[1][1]],
+                        color="#2c1810", linewidth=0.9, linestyle="-",
+                        zorder=4, solid_capstyle="butt")
+
+    margin = R * 0.15
+    ax.set_xlim(-R - margin, R + margin)
+    ax.set_ylim(-R - margin, R + margin)
+    ax.set_aspect("equal")
+    ax.set_xlabel("x (m)")
+    ax.set_ylabel("y (m)")
+    ax.set_title(f"Section transversale Ø {res.diametre*100:.0f} cm — "
+                 f"surface utilisée : {res.taux_utilisation*100:.1f}%")
+    ax.grid(True, alpha=0.3)
+
+    if bases:
+        handles = [mpatches.Patch(color=cmap[b], label=b) for b in bases]
+        ax.legend(handles=handles, loc="upper right",
+                  framealpha=0.9, fontsize=9)
+    plt.tight_layout()
+    return fig
+
+
+_PALETTE = [
+    "#A8D5BA", "#F2C078", "#F2A07B", "#A1C9F4", "#FFB7B2", "#B5A8D9",
+    "#FFD3B6", "#C7CEEA", "#B6E2D3", "#FAB1A0", "#A29BFE", "#FAD390",
+]
+
+
+def _color_for(name: str) -> str:
+    base = name.split("#")[0]
+    h = sum(ord(c) for c in base)
+    return _PALETTE[h % len(_PALETTE)]
+
+
+def equarissage_pour_allocation(allocation, resolution_mm=20, time_limit_s=3.0):
+    sections_uniques = {}
+    for c in allocation.coupes:
+        sec = (round(c.section[0], 4), round(c.section[1], 4))
+        sections_uniques[sec] = sections_uniques.get(sec, 0) + 1
+
+    if not sections_uniques:
+        return None
+
+    pat = getattr(allocation, "pattern", None)
+    if pat is not None and pat.rails:
+        from app.equarissage import PlacementSection, ResultatEquarrissage
+        placements = []
+        for r in pat.rails:
+            n_in_rail = sum(1 for c in allocation.coupes
+                            if abs(c.section[0] - r.largeur) < 1e-3
+                            and abs(c.section[1] - r.hauteur) < 1e-3
+                            and c.rail_x is not None
+                            and abs(c.rail_x - r.x) < 1e-3
+                            and abs(c.rail_y - r.y) < 1e-3)
+            label = f"{r.largeur*100:.0f}×{r.hauteur*100:.0f}"
+            if n_in_rail:
+                label += f" ×{n_in_rail}"
+            placements.append(PlacementSection(
+                nom=label,
+                x=r.x, y=r.y,
+                largeur=r.largeur, hauteur=r.hauteur,
+                rotation=r.rotation,
+            ))
+        res = ResultatEquarrissage(
+            diametre=allocation.grume_diametre,
+            placements=placements,
+            duree_s=0.0,
+            statut=f"pattern « {pat.nom} »",
+        )
+        return res, sections_uniques
+
+    sections_list = [
+        Section(f"{w*100:.0f}×{h*100:.0f}", w, h, 1)
+        for (w, h) in sections_uniques.keys()
+    ]
+    res = equarissage.equarrissage_cpsat(
+        diametre=allocation.grume_diametre,
+        sections=sections_list,
+        resolution_mm=resolution_mm,
+        time_limit_s=time_limit_s,
+    )
+    return res, sections_uniques
+
+
+def figure_3d_plan_de_coupe(resultat, kerf=0.005):
+    """Vue 3D Plotly : cylindres de grumes + boîtes de coupes + disques de trait de scie."""
+    from collections import defaultdict
+    fig = go.Figure()
+    y_offset = 0.0
+
+    for a in resultat.allocations:
+        v, t = geometry.cylindre(
+            longueur=a.grume_longueur,
+            rayon=a.grume_diametre / 2,
+            x_offset=0.0,
+            y_offset=y_offset,
+            n_segments=24,
+        )
+        fig.add_trace(go.Mesh3d(**geometry.to_plotly_mesh3d(
+            v, t,
+            color="#d4c08a", opacity=0.25,
+            name=a.grume_id, showlegend=False,
+            hovertext=(f"{a.grume_id}<br>"
+                       f"L = {a.grume_longueur:.2f} m<br>"
+                       f"Ø = {a.grume_diametre*100:.0f} cm"),
+        )))
+
+        coupes_par_rail = defaultdict(list)
+        for c in a.coupes:
+            rk = (c.rail_x if c.rail_x is not None else None,
+                  c.rail_y if c.rail_y is not None else None,
+                  c.section[0], c.section[1])
+            coupes_par_rail[rk].append(c)
+
+        for rk, coupes_rail in coupes_par_rail.items():
+            rail_x, rail_y, w_sec, h_sec = rk
+            if rail_x is None or rail_y is None:
+                rail_x = -w_sec / 2
+                rail_y = -h_sec / 2
+            x_in_rail = 0.0
+            for c in coupes_rail:
+                v_box, t_box = geometry.boite(
+                    x0=x_in_rail,
+                    y0=y_offset + rail_x,
+                    z0=rail_y,
+                    longueur=c.longueur,
+                    largeur=w_sec,
+                    hauteur=h_sec,
+                )
+                fig.add_trace(go.Mesh3d(**geometry.to_plotly_mesh3d(
+                    v_box, t_box,
+                    color=_color_for(c.debit_nom),
+                    opacity=0.95,
+                    name=c.debit_nom, showlegend=False,
+                    hovertext=(f"{c.debit_nom}<br>"
+                               f"L = {c.longueur:.2f} m<br>"
+                               f"{w_sec*100:.0f}×{h_sec*100:.0f} cm"),
+                )))
+
+                # Trait de scie : disque fin à la position de coupe
+                x_cut = x_in_rail + c.longueur
+                if x_cut < a.grume_longueur - 1e-4:
+                    v_cut, t_cut = geometry.cylindre(
+                        longueur=kerf,
+                        rayon=a.grume_diametre / 2,
+                        x_offset=x_cut,
+                        y_offset=y_offset,
+                        n_segments=24,
+                    )
+                    fig.add_trace(go.Mesh3d(**geometry.to_plotly_mesh3d(
+                        v_cut, t_cut,
+                        color="#1a1a1a", opacity=0.75,
+                        name="Trait de scie", showlegend=False,
+                        hovertext=f"Trait de scie — x = {x_cut:.3f} m",
+                    )))
+
+                x_in_rail += c.longueur + kerf
+
+        y_offset += a.grume_diametre + 0.30
+
+    fig.update_layout(
+        scene=dict(
+            xaxis_title="Longueur (m)",
+            yaxis_title="y (m)",
+            zaxis_title="z (m)",
+            aspectmode="data",
+            camera=dict(eye=dict(x=1.5, y=-2.0, z=1.0)),
+        ),
+        margin=dict(l=0, r=0, t=10, b=0),
+        height=550,
+    )
+    return fig
+
+
 # ===================================================================
 #                       ONGLET 1D
 # ===================================================================
@@ -637,221 +865,6 @@ with tab_1d:
 # ===================================================================
 #                       ONGLET 2D
 # ===================================================================
-
-def figure_section_grume(res):
-    """Trace le disque de la grume + les rectangles placés."""
-    fig, ax = plt.subplots(figsize=(7, 7))
-    R = res.diametre / 2
-
-    cercle = plt.Circle((0, 0), R, facecolor="#f4ecd8",
-                        edgecolor="#5a4a2a", linewidth=2, zorder=1)
-    ax.add_patch(cercle)
-    # Cernes décoratifs
-    for r in (R*0.85, R*0.65, R*0.45, R*0.25):
-        ax.add_patch(plt.Circle((0, 0), r, fill=False,
-                                edgecolor="#c8b88a", linewidth=0.5,
-                                linestyle="--", zorder=2))
-    # Cœur
-    ax.plot(0, 0, marker="+", markersize=14, color="#5a4a2a",
-            markeredgewidth=2, zorder=10)
-
-    bases = sorted({p.nom for p in res.placements})
-    cmap_colors = plt.cm.Set2.colors + plt.cm.Pastel2.colors
-    cmap = {b: cmap_colors[i % len(cmap_colors)] for i, b in enumerate(bases)}
-
-    for p in res.placements:
-        rect = mpatches.Rectangle((p.x, p.y), p.largeur, p.hauteur,
-                                   facecolor=cmap[p.nom], edgecolor="black",
-                                   linewidth=1.0, zorder=5)
-        ax.add_patch(rect)
-        if min(p.largeur, p.hauteur) > 0.04:
-            ax.text(p.x + p.largeur/2, p.y + p.hauteur/2,
-                    f"{p.nom}\n{p.largeur*100:.0f}×{p.hauteur*100:.0f}",
-                    ha="center", va="center",
-                    fontsize=8, fontweight="bold", zorder=6)
-
-    margin = R * 0.15
-    ax.set_xlim(-R - margin, R + margin)
-    ax.set_ylim(-R - margin, R + margin)
-    ax.set_aspect("equal")
-    ax.set_xlabel("x (m)")
-    ax.set_ylabel("y (m)")
-    ax.set_title(f"Section transversale Ø {res.diametre*100:.0f} cm — "
-                 f"surface utilisée : {res.taux_utilisation*100:.1f}%")
-    ax.grid(True, alpha=0.3)
-
-    if bases:
-        handles = [mpatches.Patch(color=cmap[b], label=b) for b in bases]
-        ax.legend(handles=handles, loc="upper right",
-                  framealpha=0.9, fontsize=9)
-    plt.tight_layout()
-    return fig
-
-
-# ========== Helpers 3D et section par grume (mode 1D) ==========
-
-# Palette stable par nom de débit (ignorant le suffixe #N)
-_PALETTE = [
-    "#A8D5BA", "#F2C078", "#F2A07B", "#A1C9F4", "#FFB7B2", "#B5A8D9",
-    "#FFD3B6", "#C7CEEA", "#B6E2D3", "#FAB1A0", "#A29BFE", "#FAD390",
-]
-
-
-def _color_for(name: str) -> str:
-    base = name.split("#")[0]
-    h = sum(ord(c) for c in base)
-    return _PALETTE[h % len(_PALETTE)]
-
-
-def equarissage_pour_allocation(allocation, resolution_mm=20, time_limit_s=3.0):
-    """
-    Pour une allocation issue d'un solveur, retourne un ResultatEquarrissage
-    + un dict {section: nb_coupes} pour la viz 2D du disque.
-
-    Si l'allocation porte un Pattern (mode couplé), on utilise directement ses
-    rails (placement fidèle, pas de recalcul). Sinon (mode 1D pur), on lance
-    le solveur 2D a posteriori sur les sections uniques de l'allocation.
-    """
-    sections_uniques = {}
-    for c in allocation.coupes:
-        sec = (round(c.section[0], 4), round(c.section[1], 4))
-        sections_uniques[sec] = sections_uniques.get(sec, 0) + 1
-
-    if not sections_uniques:
-        return None
-
-    # Mode couplé : on a les rails du pattern, on les convertit en
-    # ResultatEquarrissage sans relancer le solveur.
-    pat = getattr(allocation, "pattern", None)
-    if pat is not None and pat.rails:
-        from app.equarissage import PlacementSection, ResultatEquarrissage
-        placements = []
-        for r in pat.rails:
-            # Compter combien de coupes sont placées sur ce rail
-            n_in_rail = sum(1 for c in allocation.coupes
-                            if abs(c.section[0] - r.largeur) < 1e-3
-                            and abs(c.section[1] - r.hauteur) < 1e-3
-                            and c.rail_x is not None
-                            and abs(c.rail_x - r.x) < 1e-3
-                            and abs(c.rail_y - r.y) < 1e-3)
-            label = f"{r.largeur*100:.0f}×{r.hauteur*100:.0f}"
-            if n_in_rail:
-                label += f" ×{n_in_rail}"
-            placements.append(PlacementSection(
-                nom=label,
-                x=r.x, y=r.y,
-                largeur=r.largeur, hauteur=r.hauteur,
-                rotation=r.rotation,
-            ))
-        res = ResultatEquarrissage(
-            diametre=allocation.grume_diametre,
-            placements=placements,
-            duree_s=0.0,
-            statut=f"pattern « {pat.nom} »",
-        )
-        return res, sections_uniques
-
-    # Mode 1D pur : recalcul a posteriori
-    sections_list = [
-        Section(f"{w*100:.0f}×{h*100:.0f}", w, h, 1)
-        for (w, h) in sections_uniques.keys()
-    ]
-    res = equarissage.equarrissage_cpsat(
-        diametre=allocation.grume_diametre,
-        sections=sections_list,
-        resolution_mm=resolution_mm,
-        time_limit_s=time_limit_s,
-    )
-    return res, sections_uniques
-
-
-def figure_3d_plan_de_coupe(resultat, kerf=0.005):
-    """
-    Vue 3D Plotly : pour chaque grume, un cylindre semi-transparent et
-    les coupes sous forme de boîtes colorées sur l'axe.
-    Les grumes sont décalées en y pour la lisibilité.
-    """
-    fig = go.Figure()
-    y_offset = 0.0
-
-    for a in resultat.allocations:
-        # --- Cylindre de la grume (semi-transparent) ---
-        v, t = geometry.cylindre(
-            longueur=a.grume_longueur,
-            rayon=a.grume_diametre / 2,
-            x_offset=0.0,
-            y_offset=y_offset,
-            n_segments=24,
-        )
-        params = geometry.to_plotly_mesh3d(
-            v, t,
-            color="#d4c08a", opacity=0.25,
-            name=a.grume_id,
-            showlegend=False,
-            hovertext=(f"{a.grume_id}<br>"
-                       f"L = {a.grume_longueur:.2f} m<br>"
-                       f"Ø = {a.grume_diametre*100:.0f} cm"),
-        )
-        fig.add_trace(go.Mesh3d(**params))
-
-        # --- Coupes (boîtes opaques colorées) ---
-        # En mode 1D pur, les coupes n'ont pas de rail_x/y → centrées.
-        # En mode couplé, on utilise les rails du pattern (placement fidèle).
-        # Le tronçonnage en longueur est séquentiel par RAIL (pas global) :
-        # on regroupe les coupes par rail puis on cumule x_pos par rail.
-        from collections import defaultdict
-        coupes_par_rail = defaultdict(list)
-        for c in a.coupes:
-            rk = (c.rail_x if c.rail_x is not None else None,
-                  c.rail_y if c.rail_y is not None else None,
-                  c.section[0], c.section[1])
-            coupes_par_rail[rk].append(c)
-
-        for rk, coupes_rail in coupes_par_rail.items():
-            rail_x, rail_y, w_sec, h_sec = rk
-            # Si pas de rail défini (1D pur) : centrer dans le disque
-            if rail_x is None or rail_y is None:
-                rail_x = -w_sec / 2
-                rail_y = -h_sec / 2
-            x_in_rail = 0.0
-            for c in coupes_rail:
-                v_box, t_box = geometry.boite(
-                    x0=x_in_rail,
-                    y0=y_offset + rail_x,
-                    z0=rail_y,
-                    longueur=c.longueur,
-                    largeur=w_sec,
-                    hauteur=h_sec,
-                )
-                params = geometry.to_plotly_mesh3d(
-                    v_box, t_box,
-                    color=_color_for(c.debit_nom),
-                    opacity=0.95,
-                    name=c.debit_nom,
-                    showlegend=False,
-                    hovertext=(f"{c.debit_nom}<br>"
-                               f"L = {c.longueur:.2f} m<br>"
-                               f"{w_sec*100:.0f}×{h_sec*100:.0f} cm"),
-                )
-                fig.add_trace(go.Mesh3d(**params))
-                x_in_rail += c.longueur + kerf
-
-        # Décaler la prochaine grume
-        y_offset += a.grume_diametre + 0.30
-
-    fig.update_layout(
-        scene=dict(
-            xaxis_title="Longueur (m)",
-            yaxis_title="y (m)",
-            zaxis_title="z (m)",
-            aspectmode="data",
-            camera=dict(eye=dict(x=1.5, y=-2.0, z=1.0)),
-        ),
-        margin=dict(l=0, r=0, t=10, b=0),
-        height=550,
-    )
-    return fig
-
 
 with tab_2d:
     st.markdown(
