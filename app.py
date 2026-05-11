@@ -21,6 +21,119 @@ from app.equarissage import Section
 from app.connectors import speckle_io
 
 
+# ========== Qualité par débit — référence NF EN 14081 / charpente traditionnelle ==========
+
+_QUALITE_DEFAULTS = {
+    "arbalétrier": {"qualite": "SC1", "exclusion_coeur": True,  "orientation": "maille"},
+    "poinçon":     {"qualite": "SC1", "exclusion_coeur": True,  "orientation": "maille"},
+    "entrait":     {"qualite": "SC1", "exclusion_coeur": True,  "orientation": "maille"},
+    "chevron":     {"qualite": "SC1", "exclusion_coeur": True,  "orientation": "libre"},
+    "sablière":    {"qualite": "SC2", "exclusion_coeur": True,  "orientation": "libre"},
+    "poteau":      {"qualite": "SC2", "exclusion_coeur": True,  "orientation": "libre"},
+    "faîtière":    {"qualite": "SC2", "exclusion_coeur": True,  "orientation": "libre"},
+    "lierne":      {"qualite": "Rustique", "exclusion_coeur": False, "orientation": "libre"},
+    "contrefiche": {"qualite": "Rustique", "exclusion_coeur": False, "orientation": "libre"},
+}
+
+def _default_pref(nom: str) -> dict:
+    key = nom.lower().strip()
+    for k, v in _QUALITE_DEFAULTS.items():
+        if k in key:
+            return dict(v)
+    return {"qualite": "SC2", "exclusion_coeur": False, "orientation": "libre"}
+
+def _effective_rayon_coeur(allocation, rayon_coeur_mm: float) -> float:
+    """Rayon d'exclusion cœur pour une allocation : activé si au moins 1 débit l'exige."""
+    prefs = st.session_state.get("prefs_qualite", {})
+    if not prefs:
+        return rayon_coeur_mm / 1000.0
+    noms_base = {c.debit_nom.split("#")[0] for c in allocation.coupes}
+    exclure = any(prefs.get(n, {}).get("exclusion_coeur", False) for n in noms_base)
+    return rayon_coeur_mm / 1000.0 if exclure else 0.0
+
+def _build_mailto_url(email_dest: str, m, r, project_name: str) -> str:
+    import urllib.parse
+    lignes = [
+        f"BORDEREAU DE PRODUCTION — {project_name}",
+        f"Date : {dt.datetime.now().strftime('%d/%m/%Y')}",
+        f"Algorithme : {r.nom_algo}", "",
+        "=== KPIs ===",
+        f"Rendement matière  : {m.rendement_matiere*100:.1f}%",
+        f"Couverture demande : {m.couverture_demande*100:.1f}%",
+        f"Grumes mobilisées  : {m.nb_grumes_utilisees}/{m.nb_grumes_dispo}",
+        f"Nombre de coupes   : {m.nb_coupes}",
+        f"Chute totale       : {m.cubage_chute:.3f} m³", "",
+        "=== LISTE DE DEBIT ===",
+    ]
+    for a in r.allocations:
+        if not a.coupes:
+            continue
+        lignes.append(f"\n[{a.grume_id}] "
+                      f"Ø{a.grume_diametre*100:.0f}cm × {a.grume_longueur:.2f}m")
+        for c in a.coupes:
+            lignes.append(
+                f"  - {c.debit_nom:<20} "
+                f"L={c.longueur:.3f}m  "
+                f"{c.section[0]*100:.0f}×{c.section[1]*100:.0f}cm"
+            )
+    lignes += ["", "---", "Généré par Optim'Charpente",
+               "(Pensez à joindre le bordereau PDF séparément.)"]
+    body = "\n".join(lignes)
+    sujet = (f"Bordereau Optim'Charpente — {project_name} — "
+             f"{dt.datetime.now().strftime('%d/%m/%Y')}")
+    params = urllib.parse.urlencode(
+        {"subject": sujet, "body": body}, quote_via=urllib.parse.quote
+    )
+    dest = urllib.parse.quote(email_dest) if email_dest else ""
+    return f"mailto:{dest}?{params}"
+
+def figure_pareto(ms: list, noms: list):
+    """Scatter Pareto : X = nb_coupes, Y = chute %, taille ∝ couverture_demande."""
+    xs = [m.nb_coupes for m in ms]
+    ys = [(m.cubage_chute / m.cubage_grumes_utilisees * 100
+           if m.cubage_grumes_utilisees > 0 else 0.0) for m in ms]
+    sizes = [max(14, m.couverture_demande * 60) for m in ms]
+    palette = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728",
+               "#9467bd", "#8c564b", "#e377c2"]
+    colors = [palette[i % len(palette)] for i in range(len(ms))]
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=xs, y=ys, mode="markers+text",
+        marker=dict(size=sizes, color=colors, line=dict(width=1, color="black")),
+        text=noms, textposition="top center",
+        hovertemplate="<b>%{text}</b><br>Coupes : %{x}<br>Chute : %{y:.1f}%<extra></extra>",
+        name="Algorithmes",
+    ))
+
+    # Front de Pareto : tri nb_coupes croissant, conserver si chute ≤ meilleure vue
+    pts = sorted(zip(xs, ys, noms), key=lambda t: t[0])
+    pareto_x, pareto_y, best_y = [], [], float("inf")
+    for px, py, _ in pts:
+        if py <= best_y:
+            pareto_x.append(px); pareto_y.append(py); best_y = py
+
+    if len(pareto_x) > 1:
+        step_x, step_y = [pareto_x[0]], [pareto_y[0]]
+        for i in range(1, len(pareto_x)):
+            step_x += [pareto_x[i], pareto_x[i]]
+            step_y += [pareto_y[i - 1], pareto_y[i]]
+        fig.add_trace(go.Scatter(
+            x=step_x, y=step_y, mode="lines",
+            line=dict(color="green", width=2, dash="dot"),
+            name="Front Pareto",
+        ))
+
+    fig.update_layout(
+        xaxis_title="Nombre de coupes  (moins → mieux)",
+        yaxis_title="Chute %  (moins ↓ mieux)",
+        yaxis_autorange="reversed",
+        legend=dict(orientation="h", y=-0.18),
+        height=400, margin=dict(t=30, b=70),
+    )
+    return fig
+
+
 st.set_page_config(page_title="Optim'Charpente", page_icon="🪵", layout="wide")
 st.title("🪵 Optim'Charpente")
 st.caption("Tronçonnage 1D + équarrissage 2D pour charpente amateur")
@@ -189,119 +302,6 @@ for key, default in [
 # ========== Onglets ==========
 
 tab_1d, tab_2d = st.tabs(["📏 Tronçonnage 1D", "⭕ Équarrissage 2D"])
-
-
-# ========== Qualité par débit — référence NF EN 14081 / charpente traditionnelle ==========
-
-_QUALITE_DEFAULTS = {
-    "arbalétrier": {"qualite": "SC1", "exclusion_coeur": True,  "orientation": "maille"},
-    "poinçon":     {"qualite": "SC1", "exclusion_coeur": True,  "orientation": "maille"},
-    "entrait":     {"qualite": "SC1", "exclusion_coeur": True,  "orientation": "maille"},
-    "chevron":     {"qualite": "SC1", "exclusion_coeur": True,  "orientation": "libre"},
-    "sablière":    {"qualite": "SC2", "exclusion_coeur": True,  "orientation": "libre"},
-    "poteau":      {"qualite": "SC2", "exclusion_coeur": True,  "orientation": "libre"},
-    "faîtière":    {"qualite": "SC2", "exclusion_coeur": True,  "orientation": "libre"},
-    "lierne":      {"qualite": "Rustique", "exclusion_coeur": False, "orientation": "libre"},
-    "contrefiche": {"qualite": "Rustique", "exclusion_coeur": False, "orientation": "libre"},
-}
-
-def _default_pref(nom: str) -> dict:
-    key = nom.lower().strip()
-    for k, v in _QUALITE_DEFAULTS.items():
-        if k in key:
-            return dict(v)
-    return {"qualite": "SC2", "exclusion_coeur": False, "orientation": "libre"}
-
-def _effective_rayon_coeur(allocation, rayon_coeur_mm: float) -> float:
-    """Rayon d'exclusion cœur pour une allocation : activé si au moins 1 débit l'exige."""
-    prefs = st.session_state.get("prefs_qualite", {})
-    if not prefs:
-        return rayon_coeur_mm / 1000.0
-    noms_base = {c.debit_nom.split("#")[0] for c in allocation.coupes}
-    exclure = any(prefs.get(n, {}).get("exclusion_coeur", False) for n in noms_base)
-    return rayon_coeur_mm / 1000.0 if exclure else 0.0
-
-def _build_mailto_url(email_dest: str, m, r, project_name: str) -> str:
-    import urllib.parse
-    lignes = [
-        f"BORDEREAU DE PRODUCTION — {project_name}",
-        f"Date : {dt.datetime.now().strftime('%d/%m/%Y')}",
-        f"Algorithme : {r.nom_algo}", "",
-        "=== KPIs ===",
-        f"Rendement matière  : {m.rendement_matiere*100:.1f}%",
-        f"Couverture demande : {m.couverture_demande*100:.1f}%",
-        f"Grumes mobilisées  : {m.nb_grumes_utilisees}/{m.nb_grumes_dispo}",
-        f"Nombre de coupes   : {m.nb_coupes}",
-        f"Chute totale       : {m.cubage_chute:.3f} m³", "",
-        "=== LISTE DE DEBIT ===",
-    ]
-    for a in r.allocations:
-        if not a.coupes:
-            continue
-        lignes.append(f"\n[{a.grume_id}] "
-                      f"Ø{a.grume_diametre*100:.0f}cm × {a.grume_longueur:.2f}m")
-        for c in a.coupes:
-            lignes.append(
-                f"  - {c.debit_nom:<20} "
-                f"L={c.longueur:.3f}m  "
-                f"{c.section[0]*100:.0f}×{c.section[1]*100:.0f}cm"
-            )
-    lignes += ["", "---", "Généré par Optim'Charpente",
-               "(Pensez à joindre le bordereau PDF séparément.)"]
-    body = "\n".join(lignes)
-    sujet = (f"Bordereau Optim'Charpente — {project_name} — "
-             f"{dt.datetime.now().strftime('%d/%m/%Y')}")
-    params = urllib.parse.urlencode(
-        {"subject": sujet, "body": body}, quote_via=urllib.parse.quote
-    )
-    dest = urllib.parse.quote(email_dest) if email_dest else ""
-    return f"mailto:{dest}?{params}"
-
-def figure_pareto(ms: list, noms: list):
-    """Scatter Pareto : X = nb_coupes, Y = chute %, taille ∝ couverture_demande."""
-    xs = [m.nb_coupes for m in ms]
-    ys = [(m.cubage_chute / m.cubage_grumes_utilisees * 100
-           if m.cubage_grumes_utilisees > 0 else 0.0) for m in ms]
-    sizes = [max(14, m.couverture_demande * 60) for m in ms]
-    palette = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728",
-               "#9467bd", "#8c564b", "#e377c2"]
-    colors = [palette[i % len(palette)] for i in range(len(ms))]
-
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=xs, y=ys, mode="markers+text",
-        marker=dict(size=sizes, color=colors, line=dict(width=1, color="black")),
-        text=noms, textposition="top center",
-        hovertemplate="<b>%{text}</b><br>Coupes : %{x}<br>Chute : %{y:.1f}%<extra></extra>",
-        name="Algorithmes",
-    ))
-
-    # Front de Pareto : tri nb_coupes croissant, conserver si chute ≤ meilleure vue
-    pts = sorted(zip(xs, ys, noms), key=lambda t: t[0])
-    pareto_x, pareto_y, best_y = [], [], float("inf")
-    for px, py, _ in pts:
-        if py <= best_y:
-            pareto_x.append(px); pareto_y.append(py); best_y = py
-
-    if len(pareto_x) > 1:
-        step_x, step_y = [pareto_x[0]], [pareto_y[0]]
-        for i in range(1, len(pareto_x)):
-            step_x += [pareto_x[i], pareto_x[i]]
-            step_y += [pareto_y[i - 1], pareto_y[i]]
-        fig.add_trace(go.Scatter(
-            x=step_x, y=step_y, mode="lines",
-            line=dict(color="green", width=2, dash="dot"),
-            name="Front Pareto",
-        ))
-
-    fig.update_layout(
-        xaxis_title="Nombre de coupes  (moins → mieux)",
-        yaxis_title="Chute %  (moins ↓ mieux)",
-        yaxis_autorange="reversed",
-        legend=dict(orientation="h", y=-0.18),
-        height=400, margin=dict(t=30, b=70),
-    )
-    return fig
 
 
 # ========== Helpers viz (définis avant les onglets pour éviter NameError) ==========
