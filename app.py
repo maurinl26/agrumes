@@ -50,7 +50,57 @@ with st.sidebar:
     )
     cpsat_time_2d = st.slider("Temps max CP-SAT 2D (s)", 1, 60, 5)
 
+    rayon_coeur_mm = st.slider(
+        "Zone cœur — rayon exclu (mm)", 0, 80, 30, 10,
+        help="Exclut du placement 2D les rectangles chevauchant le cœur du billon. "
+             "NF EN 14081 : recommandé pour SC1. 0 = pas d'exclusion.",
+    )
+
     st.divider()
+    with st.expander("🪵 Qualité par débit", expanded=False):
+        noms_debits = list(
+            st.session_state.get("debits_df", DEBITS_DEMO)["nom"].dropna().unique()
+        )
+        prefs = st.session_state.get("prefs_qualite", {})
+        for nom in noms_debits:
+            if nom not in prefs:
+                prefs[nom] = _default_pref(nom)
+        st.session_state["prefs_qualite"] = prefs
+
+        df_p = pd.DataFrame([{
+            "Débit": n,
+            "Qualité": prefs[n]["qualite"],
+            "Excl. cœur": prefs[n]["exclusion_coeur"],
+            "Fil": prefs[n]["orientation"],
+        } for n in noms_debits])
+
+        df_e = st.data_editor(
+            df_p,
+            column_config={
+                "Débit": st.column_config.TextColumn(disabled=True),
+                "Qualité": st.column_config.SelectboxColumn(
+                    options=["SC1", "SC2", "Rustique"], required=True,
+                ),
+                "Excl. cœur": st.column_config.CheckboxColumn(),
+                "Fil": st.column_config.SelectboxColumn(
+                    options=["libre", "dosse", "maille"], required=True,
+                ),
+            },
+            hide_index=True,
+            key="ed_prefs_qualite",
+        )
+        for _, row in df_e.iterrows():
+            prefs[row["Débit"]] = {
+                "qualite": row["Qualité"],
+                "exclusion_coeur": bool(row["Excl. cœur"]),
+                "orientation": row["Fil"],
+            }
+        st.session_state["prefs_qualite"] = prefs
+        st.caption(
+            "SC1 = haute qualité, exclusion cœur obligatoire (NF EN 14081). "
+            "SC2 = usage courant. Rustique = pièces non vues."
+        )
+
     st.markdown(
         "**Lexique**\n\n"
         "- **Grume** : tronc, défini par longueur et diamètre.\n"
@@ -129,6 +179,7 @@ for key, default in [
     ("debits_df", DEBITS_DEMO.copy()),
     ("sections_2d_df", SECTIONS_2D_DEMO.copy()),
     ("diametre_2d", 0.50),
+    ("prefs_qualite", {}),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -137,6 +188,119 @@ for key, default in [
 # ========== Onglets ==========
 
 tab_1d, tab_2d = st.tabs(["📏 Tronçonnage 1D", "⭕ Équarrissage 2D"])
+
+
+# ========== Qualité par débit — référence NF EN 14081 / charpente traditionnelle ==========
+
+_QUALITE_DEFAULTS = {
+    "arbalétrier": {"qualite": "SC1", "exclusion_coeur": True,  "orientation": "maille"},
+    "poinçon":     {"qualite": "SC1", "exclusion_coeur": True,  "orientation": "maille"},
+    "entrait":     {"qualite": "SC1", "exclusion_coeur": True,  "orientation": "maille"},
+    "chevron":     {"qualite": "SC1", "exclusion_coeur": True,  "orientation": "libre"},
+    "sablière":    {"qualite": "SC2", "exclusion_coeur": True,  "orientation": "libre"},
+    "poteau":      {"qualite": "SC2", "exclusion_coeur": True,  "orientation": "libre"},
+    "faîtière":    {"qualite": "SC2", "exclusion_coeur": True,  "orientation": "libre"},
+    "lierne":      {"qualite": "Rustique", "exclusion_coeur": False, "orientation": "libre"},
+    "contrefiche": {"qualite": "Rustique", "exclusion_coeur": False, "orientation": "libre"},
+}
+
+def _default_pref(nom: str) -> dict:
+    key = nom.lower().strip()
+    for k, v in _QUALITE_DEFAULTS.items():
+        if k in key:
+            return dict(v)
+    return {"qualite": "SC2", "exclusion_coeur": False, "orientation": "libre"}
+
+def _effective_rayon_coeur(allocation, rayon_coeur_mm: float) -> float:
+    """Rayon d'exclusion cœur pour une allocation : activé si au moins 1 débit l'exige."""
+    prefs = st.session_state.get("prefs_qualite", {})
+    if not prefs:
+        return rayon_coeur_mm / 1000.0
+    noms_base = {c.debit_nom.split("#")[0] for c in allocation.coupes}
+    exclure = any(prefs.get(n, {}).get("exclusion_coeur", False) for n in noms_base)
+    return rayon_coeur_mm / 1000.0 if exclure else 0.0
+
+def _build_mailto_url(email_dest: str, m, r, project_name: str) -> str:
+    import urllib.parse
+    lignes = [
+        f"BORDEREAU DE PRODUCTION — {project_name}",
+        f"Date : {dt.datetime.now().strftime('%d/%m/%Y')}",
+        f"Algorithme : {r.nom_algo}", "",
+        "=== KPIs ===",
+        f"Rendement matière  : {m.rendement_matiere*100:.1f}%",
+        f"Couverture demande : {m.couverture_demande*100:.1f}%",
+        f"Grumes mobilisées  : {m.nb_grumes_utilisees}/{m.nb_grumes_dispo}",
+        f"Nombre de coupes   : {m.nb_coupes}",
+        f"Chute totale       : {m.cubage_chute:.3f} m³", "",
+        "=== LISTE DE DEBIT ===",
+    ]
+    for a in r.allocations:
+        if not a.coupes:
+            continue
+        lignes.append(f"\n[{a.grume_id}] "
+                      f"Ø{a.grume_diametre*100:.0f}cm × {a.grume_longueur:.2f}m")
+        for c in a.coupes:
+            lignes.append(
+                f"  - {c.debit_nom:<20} "
+                f"L={c.longueur:.3f}m  "
+                f"{c.section[0]*100:.0f}×{c.section[1]*100:.0f}cm"
+            )
+    lignes += ["", "---", "Généré par Optim'Charpente",
+               "(Pensez à joindre le bordereau PDF séparément.)"]
+    body = "\n".join(lignes)
+    sujet = (f"Bordereau Optim'Charpente — {project_name} — "
+             f"{dt.datetime.now().strftime('%d/%m/%Y')}")
+    params = urllib.parse.urlencode(
+        {"subject": sujet, "body": body}, quote_via=urllib.parse.quote
+    )
+    dest = urllib.parse.quote(email_dest) if email_dest else ""
+    return f"mailto:{dest}?{params}"
+
+def figure_pareto(ms: list, noms: list):
+    """Scatter Pareto : X = nb_coupes, Y = chute %, taille ∝ couverture_demande."""
+    xs = [m.nb_coupes for m in ms]
+    ys = [(m.cubage_chute / m.cubage_grumes_utilisees * 100
+           if m.cubage_grumes_utilisees > 0 else 0.0) for m in ms]
+    sizes = [max(14, m.couverture_demande * 60) for m in ms]
+    palette = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728",
+               "#9467bd", "#8c564b", "#e377c2"]
+    colors = [palette[i % len(palette)] for i in range(len(ms))]
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=xs, y=ys, mode="markers+text",
+        marker=dict(size=sizes, color=colors, line=dict(width=1, color="black")),
+        text=noms, textposition="top center",
+        hovertemplate="<b>%{text}</b><br>Coupes : %{x}<br>Chute : %{y:.1f}%<extra></extra>",
+        name="Algorithmes",
+    ))
+
+    # Front de Pareto : tri nb_coupes croissant, conserver si chute ≤ meilleure vue
+    pts = sorted(zip(xs, ys, noms), key=lambda t: t[0])
+    pareto_x, pareto_y, best_y = [], [], float("inf")
+    for px, py, _ in pts:
+        if py <= best_y:
+            pareto_x.append(px); pareto_y.append(py); best_y = py
+
+    if len(pareto_x) > 1:
+        step_x, step_y = [pareto_x[0]], [pareto_y[0]]
+        for i in range(1, len(pareto_x)):
+            step_x += [pareto_x[i], pareto_x[i]]
+            step_y += [pareto_y[i - 1], pareto_y[i]]
+        fig.add_trace(go.Scatter(
+            x=step_x, y=step_y, mode="lines",
+            line=dict(color="green", width=2, dash="dot"),
+            name="Front Pareto",
+        ))
+
+    fig.update_layout(
+        xaxis_title="Nombre de coupes  (moins → mieux)",
+        yaxis_title="Chute %  (moins ↓ mieux)",
+        yaxis_autorange="reversed",
+        legend=dict(orientation="h", y=-0.18),
+        height=400, margin=dict(t=30, b=70),
+    )
+    return fig
 
 
 # ========== Helpers viz (définis avant les onglets pour éviter NameError) ==========
@@ -153,7 +317,7 @@ def _chord(val: float, R: float, horizontal: bool = True):
     return (val, -span), (val, span)
 
 
-def figure_section_grume(res):
+def figure_section_grume(res, rayon_coeur: float = 0.0, prefs: dict = None):
     """Trace le disque de la grume + les rectangles placés + les traits de coupe."""
     fig, ax = plt.subplots(figsize=(7, 7))
     R = res.diametre / 2
@@ -167,6 +331,18 @@ def figure_section_grume(res):
                                 linestyle="--", zorder=2))
     ax.plot(0, 0, marker="+", markersize=14, color="#5a4a2a",
             markeredgewidth=2, zorder=10)
+
+    if rayon_coeur > 0:
+        coeur_patch = plt.Circle(
+            (0, 0), rayon_coeur,
+            facecolor="#cc222215", edgecolor="#cc2222",
+            linewidth=1.5, linestyle="--", hatch="////", zorder=3,
+        )
+        ax.add_patch(coeur_patch)
+        ax.text(0, rayon_coeur * 1.18,
+                f"Zone cœur\nr = {rayon_coeur*1000:.0f} mm",
+                ha="center", va="bottom", fontsize=7,
+                color="#cc2222", zorder=11)
 
     bases = sorted({p.nom for p in res.placements})
     cmap_colors = plt.cm.Set2.colors + plt.cm.Pastel2.colors
@@ -196,6 +372,21 @@ def figure_section_grume(res):
                 ax.plot([chord[0][0], chord[1][0]], [chord[0][1], chord[1][1]],
                         color="#2c1810", linewidth=0.9, linestyle="-",
                         zorder=4, solid_capstyle="butt")
+
+        # Badge qualité
+        if prefs:
+            _badge_colors = {"SC1": "#A1C9F4", "SC2": "#A8D5BA", "Rustique": "#FFB7B2"}
+            nom_base = p.nom.split("×")[0].strip().split(" ")[0]
+            pref = prefs.get(nom_base)
+            if pref:
+                ax.text(
+                    p.x + p.largeur, p.y + p.hauteur,
+                    pref["qualite"],
+                    ha="right", va="top", fontsize=6, zorder=8,
+                    bbox=dict(boxstyle="round,pad=0.15",
+                              facecolor=_badge_colors.get(pref["qualite"], "#eee"),
+                              alpha=0.9, edgecolor="none"),
+                )
 
     margin = R * 0.15
     ax.set_xlim(-R - margin, R + margin)
@@ -227,7 +418,8 @@ def _color_for(name: str) -> str:
     return _PALETTE[h % len(_PALETTE)]
 
 
-def equarissage_pour_allocation(allocation, resolution_mm=20, time_limit_s=3.0):
+def equarissage_pour_allocation(allocation, resolution_mm=20,
+                                time_limit_s=3.0, rayon_coeur: float = 0.0):
     sections_uniques = {}
     for c in allocation.coupes:
         sec = (round(c.section[0], 4), round(c.section[1], 4))
@@ -273,6 +465,7 @@ def equarissage_pour_allocation(allocation, resolution_mm=20, time_limit_s=3.0):
         sections=sections_list,
         resolution_mm=resolution_mm,
         time_limit_s=time_limit_s,
+        rayon_coeur=rayon_coeur,
     )
     return res, sections_uniques
 
@@ -645,6 +838,22 @@ with tab_1d:
                 f"stock total disponible : {ms[0].cubage_grumes_dispo:.3f} m³."
             )
 
+        # --- Pareto chute / coupes ---
+        if len(ms) > 1:
+            with st.expander("📊 Analyse Pareto chute / coupes", expanded=True):
+                st.plotly_chart(
+                    figure_pareto(
+                        ms,
+                        [r.nom_algo for r in st.session_state.resultats_1d],
+                    ),
+                    use_container_width=True,
+                )
+                st.caption(
+                    "Taille de bulle ∝ couverture de la demande. "
+                    "Front vert = solutions non-dominées : impossible d'améliorer "
+                    "l'un des axes sans dégrader l'autre."
+                )
+
         nom_choisi = st.selectbox("Détail :",
                                   [r.nom_algo for r in st.session_state.resultats_1d])
         res = next(r for r in st.session_state.resultats_1d if r.nom_algo == nom_choisi)
@@ -710,6 +919,7 @@ with tab_1d:
                         a_choisie,
                         resolution_mm=resolution_mm,
                         time_limit_s=cpsat_time_2d,
+                        rayon_coeur=_effective_rayon_coeur(a_choisie, rayon_coeur_mm),
                     )
 
                 if out is None:
@@ -727,7 +937,11 @@ with tab_1d:
                               if res_2d else "—")
 
                     if res_2d and res_2d.placements:
-                        st.pyplot(figure_section_grume(res_2d))
+                        st.pyplot(figure_section_grume(
+                            res_2d,
+                            rayon_coeur=rayon_coeur_mm / 1000.0,
+                            prefs=st.session_state.get("prefs_qualite"),
+                        ))
 
                     if res_2d and n_placees < n_sections:
                         st.warning(
@@ -861,6 +1075,45 @@ with tab_1d:
                 key="dl_pdf_bordereau",
             )
 
+        # ============== Export email ==============
+        with st.expander("📧 Envoyer le bordereau par email", expanded=False):
+            st.info(
+                "Génère un lien **mailto:** qui ouvre votre client email local "
+                "(Outlook, Apple Mail, Thunderbird…) avec le bordereau pré-rempli. "
+                "Pensez à joindre le PDF séparément."
+            )
+            email_dest = st.text_input(
+                "Adresse email destinataire",
+                placeholder="scieur@exemple.fr",
+                key="email_dest_bordereau",
+            )
+            algo_email = st.selectbox(
+                "Algo à inclure",
+                [r.nom_algo for r in st.session_state.resultats_1d],
+                index=idx_best,
+                key="algo_email_sel",
+            )
+            if st.button("✉️ Préparer l'email", key="btn_mailto"):
+                r_e = next(
+                    r for r in st.session_state.resultats_1d
+                    if r.nom_algo == algo_email
+                )
+                idx_e = next(
+                    i for i, r in enumerate(st.session_state.resultats_1d)
+                    if r.nom_algo == algo_email
+                )
+                st.session_state["mailto_url"] = _build_mailto_url(
+                    email_dest, ms[idx_e], r_e,
+                    st.session_state.get("project_name_pdf", "Charpente"),
+                )
+            if "mailto_url" in st.session_state:
+                st.markdown(
+                    f'<a href="{st.session_state["mailto_url"]}" '
+                    f'target="_blank" style="font-size:1.05em;">'
+                    f'✉️ Ouvrir dans votre client email ↗</a>',
+                    unsafe_allow_html=True,
+                )
+
 
 # ===================================================================
 #                       ONGLET 2D
@@ -925,11 +1178,13 @@ with tab_2d:
                 sections=sections,
                 resolution_mm=resolution_mm,
                 time_limit_s=cpsat_time_2d,
+                rayon_coeur=rayon_coeur_mm / 1000.0,
             )
             if res_2d is None:
                 st.warning("OR-Tools indisponible, fallback heuristique.")
                 res_2d = equarissage.equarrissage_glouton(
-                    st.session_state.diametre_2d, sections
+                    st.session_state.diametre_2d, sections,
+                    rayon_coeur=rayon_coeur_mm / 1000.0,
                 )
         st.session_state.resultat_2d = res_2d
 
@@ -947,7 +1202,11 @@ with tab_2d:
         if res_2d.placements:
             col_fig, col_table = st.columns([2, 1])
             with col_fig:
-                st.pyplot(figure_section_grume(res_2d))
+                st.pyplot(figure_section_grume(
+                    res_2d,
+                    rayon_coeur=rayon_coeur_mm / 1000.0,
+                    prefs=st.session_state.get("prefs_qualite"),
+                ))
             with col_table:
                 st.markdown("**Détail des placements**")
                 df_placements = pd.DataFrame([{

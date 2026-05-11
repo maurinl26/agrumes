@@ -81,7 +81,8 @@ def _coins_dans_cercle(cx: int, cy: int, w: int, h: int,
 
 def equarrissage_cpsat(diametre: float, sections: list,
                        resolution_mm: int = 20,
-                       time_limit_s: float = 5.0) -> Optional[ResultatEquarrissage]:
+                       time_limit_s: float = 5.0,
+                       rayon_coeur: float = 0.0) -> Optional[ResultatEquarrissage]:
     """
     Solveur exact (ou faisable sous limite de temps) pour le placement 2D.
 
@@ -132,6 +133,12 @@ def equarrissage_cpsat(diametre: float, sections: list,
                         if dx * dx + dy * dy > r2:
                             coins_ok = False
                             break
+                    if coins_ok and rayon_coeur > 0:
+                        r_c = rayon_coeur * 1000 / resolution_mm
+                        nx = max(cx, min(centre_x, cx + w))
+                        ny = max(cy, min(centre_y, cy + h))
+                        if (nx - centre_x) ** 2 + (ny - centre_y) ** 2 < r_c * r_c:
+                            coins_ok = False
                     if coins_ok:
                         candidats.append((i_sec, w, h, rot, cx, cy))
 
@@ -204,7 +211,8 @@ def equarrissage_cpsat(diametre: float, sections: list,
     )
 
 
-def equarrissage_glouton(diametre: float, sections: list) -> ResultatEquarrissage:
+def equarrissage_glouton(diametre: float, sections: list,
+                         rayon_coeur: float = 0.0) -> ResultatEquarrissage:
     """
     Heuristique gloutonne, fallback si OR-Tools absent.
     Trie les sections par surface décroissante, place chacune dans la
@@ -239,6 +247,12 @@ def equarrissage_glouton(diametre: float, sections: list) -> ResultatEquarrissag
                 for cy in range(D_cells - h + 1):
                     if not _coins_dans_cercle(cx, cy, w, h, centre, centre, r2):
                         continue
+                    if rayon_coeur > 0:
+                        r_c = rayon_coeur * 1000 / resolution_mm
+                        nx = max(cx, min(centre, cx + w))
+                        ny = max(cy, min(centre, cy + h))
+                        if (nx - centre) ** 2 + (ny - centre) ** 2 < r_c * r_c:
+                            continue
                     # Vérifier non-superposition
                     cells = {(cx + dx, cy + dy) for dx in range(w) for dy in range(h)}
                     if cells & occupied:
