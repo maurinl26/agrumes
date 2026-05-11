@@ -37,8 +37,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-py-modules = ["engine", "equarissage", "geometry", "pattern", "metrics", "app", "launcher"]
-packages = ["connectors"]
+packages = ["app", "app.connectors"]
 
 [tool.poetry]
 package-mode = false

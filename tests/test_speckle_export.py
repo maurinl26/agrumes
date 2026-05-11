@@ -4,9 +4,8 @@ Ne nécessite pas de connexion serveur : on intercepte juste l'arbre de Bases
 et on inspecte les meshes générés.
 """
 
-import engine
-import geometry
-from connectors import speckle_io
+from app import engine, geometry
+from app.connectors import speckle_io
 from specklepy.objects.base import Base
 from specklepy.objects.geometry import Mesh
 

@@ -1,7 +1,6 @@
 """Comparaison 1D pur vs solveur couplé 1D+2D."""
 
-import engine
-import pattern
+from app import engine, pattern
 
 
 def comparer(nom, grumes, debits):

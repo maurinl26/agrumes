@@ -40,9 +40,8 @@ except ImportError:
     Base = None  # type: ignore
 
 # Format pivot
-from engine import Grume, Debit, Resultat
-# Helpers de génération de meshes (pour export 3D)
-import geometry
+from ..engine import Grume, Debit, Resultat
+from .. import geometry
 
 
 def _hex_to_argb(hex_str: str, alpha: int = 255) -> int:

@@ -20,10 +20,8 @@ from __future__ import annotations
 
 import datetime as dt
 import math
-import sys
 from collections import defaultdict
 from io import BytesIO
-from pathlib import Path
 
 import matplotlib
 matplotlib.use("Agg")
@@ -31,13 +29,8 @@ import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 
-# Permet l'usage en standalone (parent dir dans sys.path)
-_PARENT = Path(__file__).resolve().parent.parent
-if str(_PARENT) not in sys.path:
-    sys.path.insert(0, str(_PARENT))
-
-import equarissage   # pour reconstruire un plan 2D quand l'algo est 1D pur
-import metrics       # pour les KPI
+from .. import equarissage
+from .. import metrics
 
 
 # Palette cohérente avec app.py (couleurs par nom de débit)

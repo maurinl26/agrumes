@@ -7,7 +7,7 @@ import matplotlib.patches as mpatches
 import plotly.graph_objects as go
 from collections import defaultdict
 
-import engine, equarissage, geometry, pattern
+from app import engine, equarissage, geometry, pattern
 
 
 # Réplique des fonctions de viz d'app.py

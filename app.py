@@ -15,14 +15,10 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import plotly.graph_objects as go
 
-import engine
-import equarissage
-import geometry
-import pattern
-import metrics
-from engine import Grume, Debit
-from equarissage import Section
-from connectors import speckle_io
+from app import engine, equarissage, geometry, pattern, metrics
+from app.engine import Grume, Debit
+from app.equarissage import Section
+from app.connectors import speckle_io
 
 
 st.set_page_config(page_title="Optim'Charpente", page_icon="🪵", layout="wide")
@@ -588,7 +584,7 @@ with tab_1d:
             "(KPIs + allocations) puis une page par grume utilisée "
             "(section transversale + plan de tronçonnage par rail)."
         )
-        from connectors import bordereau_pdf
+        from app.connectors import bordereau_pdf
 
         cb1, cb2 = st.columns([2, 1])
         with cb1:
@@ -728,7 +724,7 @@ def equarissage_pour_allocation(allocation, resolution_mm=20, time_limit_s=3.0):
     # ResultatEquarrissage sans relancer le solveur.
     pat = getattr(allocation, "pattern", None)
     if pat is not None and pat.rails:
-        from equarissage import PlacementSection, ResultatEquarrissage
+        from app.equarissage import PlacementSection, ResultatEquarrissage
         placements = []
         for r in pat.rails:
             # Compter combien de coupes sont placées sur ce rail

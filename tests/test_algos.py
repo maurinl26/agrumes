@@ -1,7 +1,7 @@
 """Tests des trois algorithmes sur plusieurs instances."""
 
-import engine
-from engine import Grume, Debit
+from app import engine
+from app.engine import Grume, Debit
 
 
 def stress_test(nom, grumes, debits, time_limit=5):

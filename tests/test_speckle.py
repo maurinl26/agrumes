@@ -1,10 +1,10 @@
 """Tests du connecteur Speckle (ne nécessitent pas de serveur)."""
 
-from connectors.speckle_io import (
+from app.connectors.speckle_io import (
     is_available, parse_speckle_url, _aggregate,
     DEFAULT_DEBIT_KEYWORDS, DEFAULT_GRUME_KEYWORDS,
 )
-from engine import Debit
+from app.engine import Debit
 
 
 def assert_eq(actual, expected, label):

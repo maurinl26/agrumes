@@ -6,10 +6,8 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import plotly.graph_objects as go
 
-import engine
-import equarissage
-import geometry
-from equarissage import Section
+from app import engine, equarissage, geometry
+from app.equarissage import Section
 
 
 def figure_3d_plan_de_coupe(resultat, kerf=0.005):

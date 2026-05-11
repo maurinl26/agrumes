@@ -27,9 +27,9 @@ import time
 from dataclasses import dataclass, field
 from typing import Optional
 
-import equarissage
-from equarissage import Section
-from engine import Grume, Debit, Coupe, Allocation, Resultat, KERF
+from . import equarissage
+from .equarissage import Section
+from .engine import Grume, Debit, Coupe, Allocation, Resultat, KERF
 
 
 # ============================================================
