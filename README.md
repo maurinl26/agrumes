@@ -202,16 +202,16 @@ Si tu veux juste **essayer l'app sans rien installer durablement** :
 
 ```bash
 # Depuis GitHub
-uvx --from git+https://github.com/USER/REPO optim-charpente
+uvx --from git+https://github.com/maurinl26/agrumes optim-charpente
 
 # Depuis un clone local
 uvx --from . optim-charpente
 
 # Avec connecteur Speckle activé
-uvx --from "git+https://github.com/USER/REPO[speckle]" optim-charpente
+uvx --from "git+https://github.com/maurinl26/agrumes[speckle]" optim-charpente
 
 # En passant des flags à Streamlit
-uvx --from git+https://github.com/USER/REPO optim-charpente --server.port 8502
+uvx --from git+https://github.com/maurinl26/agrumes optim-charpente --server.port 8502
 ```
 
 `uvx` télécharge le code, crée un environnement isolé jetable, installe les dépendances, et lance l'app. À l'arrêt, plus rien ne reste sur ta machine.
@@ -219,7 +219,7 @@ uvx --from git+https://github.com/USER/REPO optim-charpente --server.port 8502
 Pour une version pinnée (tag git) :
 
 ```bash
-uvx --from git+https://github.com/USER/REPO@v0.1.0 optim-charpente
+uvx --from git+https://github.com/maurinl26/agrumes@v0.1.0 optim-charpente
 ```
 
 ### Installation locale (développement) avec [uv](https://docs.astral.sh/uv/)
