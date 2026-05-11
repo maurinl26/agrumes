@@ -59,7 +59,8 @@ with st.sidebar:
     st.divider()
     with st.expander("🪵 Qualité par débit", expanded=False):
         noms_debits = list(
-            st.session_state.get("debits_df", DEBITS_DEMO)["nom"].dropna().unique()
+            st.session_state.get("debits_df", pd.DataFrame(columns=["nom"]))
+            ["nom"].dropna().unique()
         )
         prefs = st.session_state.get("prefs_qualite", {})
         for nom in noms_debits:
