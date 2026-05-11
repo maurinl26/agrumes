@@ -40,6 +40,9 @@ build-backend = "setuptools.build_meta"
 py-modules = ["engine", "equarissage", "geometry", "pattern", "metrics", "app", "launcher"]
 packages = ["connectors"]
 
+[tool.poetry]
+package-mode = false
+
 [tool.ruff]
 line-length = 100
 target-version = "py310"
